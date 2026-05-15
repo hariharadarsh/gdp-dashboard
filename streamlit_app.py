@@ -1,151 +1,118 @@
-import streamlit as st
-import pandas as pd
-import math
+import sys
 from pathlib import Path
+from datetime import date, datetime, timedelta
 
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
+import streamlit as st
+
+sys.path.insert(0, str(Path(__file__).parent))
+from utils.data import (
+    load_tasks,
+    PRIORITY_EMOJI,
 )
+from utils.ui import inject_css, setup_sidebar
 
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
+st.set_page_config(page_title="Family Hub", page_icon="🏠", layout="wide")
 
-@st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
+current_user = setup_sidebar()
+inject_css()
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
+today = date.today()
+today_str = today.strftime("%Y-%m-%d")
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
+hour = datetime.now().hour
+if hour < 12:
+    greeting = "Good morning"
+elif hour < 17:
+    greeting = "Good afternoon"
+else:
+    greeting = "Good evening"
 
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
+st.title(f"🏠 {greeting}, {current_user['name']}!")
+st.caption(today.strftime("%A, %B %d, %Y"))
 
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
+tasks = load_tasks()
 
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
+# Metrics
+week_end = (today + timedelta(days=7)).strftime("%Y-%m-%d")
 
-    return gdp_df
-
-gdp_df = get_gdp_data()
-
-# -----------------------------------------------------------------------------
-# Draw the actual page
-
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
-
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
-
-# Add some spacing
-''
-''
-
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
-
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
+overdue = [
+    t for t in tasks
+    if t.get("due_date") and t["due_date"] < today_str and t["status"] != "Done"
+]
+due_today = [
+    t for t in tasks
+    if t.get("due_date") == today_str and t["status"] != "Done"
+]
+this_week = [
+    t for t in tasks
+    if t.get("due_date") and today_str < t["due_date"] <= week_end and t["status"] != "Done"
+]
+done_today = [
+    t for t in tasks
+    if t.get("updated_at", "")[:10] == today_str and t["status"] == "Done"
 ]
 
-st.header('GDP over time', divider='gray')
+col1, col2, col3, col4 = st.columns(4)
+with col1:
+    st.metric("🔴 Overdue", len(overdue))
+with col2:
+    st.metric("📅 Due Today", len(due_today))
+with col3:
+    st.metric("📆 This Week", len(this_week))
+with col4:
+    st.metric("✅ Done Today", len(done_today))
 
-''
+st.divider()
 
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
+left_col, right_col = st.columns(2)
+
+with left_col:
+    st.subheader("📋 Today's Tasks")
+    todays_tasks = sorted(
+        overdue + due_today,
+        key=lambda t: (t.get("due_date") or "", t.get("priority", ""))
+    )
+    if not todays_tasks:
+        st.info("No tasks due today. Enjoy your day! 🎉")
+    else:
+        for task in todays_tasks:
+            priority_emoji = PRIORITY_EMOJI.get(task.get("priority", "Medium"), "")
+            labels = task.get("labels", [])
+            label_str = " ".join(
+                f'<span class="label-chip">{lbl}</span>' for lbl in labels
+            )
+            overdue_badge = ""
+            if task.get("due_date") and task["due_date"] < today_str:
+                overdue_badge = ' <span style="color:#EF4444;font-size:11px;">OVERDUE</span>'
+            st.markdown(
+                f"""<div class="task-card">
+                  <strong>{priority_emoji} {task['title']}</strong>{overdue_badge}<br>
+                  <small>{label_str}</small>
+                </div>""",
+                unsafe_allow_html=True,
+            )
+
+with right_col:
+    st.subheader("🔮 Coming Up")
+    upcoming = sorted(this_week, key=lambda t: t.get("due_date", ""))
+    if not upcoming:
+        st.info("Nothing due in the next 7 days.")
+    else:
+        for task in upcoming:
+            due = date.fromisoformat(task["due_date"])
+            days_away = (due - today).days
+            day_label = f"in {days_away} day{'s' if days_away != 1 else ''}"
+            priority_emoji = PRIORITY_EMOJI.get(task.get("priority", "Medium"), "")
+            st.markdown(
+                f"""<div class="task-card">
+                  <strong>{priority_emoji} {task['title']}</strong><br>
+                  <small style="color:#6B7280;">{due.strftime('%b %d')} — {day_label}</small>
+                </div>""",
+                unsafe_allow_html=True,
+            )
+
+st.divider()
+st.markdown(
+    "<div style='text-align:center;color:#9CA3AF;font-size:13px;'>Family Hub — built with Streamlit</div>",
+    unsafe_allow_html=True,
 )
-
-''
-''
-
-
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
-
-st.header(f'GDP in {to_year}', divider='gray')
-
-''
-
-cols = st.columns(4)
-
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
